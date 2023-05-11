@@ -1,0 +1,78 @@
+---
+- name: 'hack: update the /etc/group'
+  ansible.builtin.lineinfile:
+    path: '/etc/group'
+    line: 'ceph:x:64045:'
+    state: 'present'
+
+- name: 'Install the ceph-common package'
+  ansible.builtin.package:
+    name: 'ceph-common'
+    update_cache: yes
+    state: 'present'
+
+- name: 'Generate the minimal config for the cephfs client'
+  ansible.builtin.command:
+    cmd: 'ceph --cluster {{ ceph_cluster_name }} config generate-minimal-conf'
+  changed_when: false
+  delegate_to: '{{ ceph_mon }}'
+  register: ceph_config
+
+- name: 'Set the /etc/ceph/ceph.conf file'
+  ansible.builtin.copy:
+    content: '{{ ceph_config.stdout }}'
+    dest: '/etc/ceph/ceph.conf'
+    owner: root
+    group: root
+    mode: '0644'
+
+- name: 'Get the key for that lab'
+  ansible.builtin.command:
+    cmd: 'ceph --cluster {{ ceph_cluster_name }} auth get-key client.{{ lab_name }}'
+  changed_when: false
+  delegate_to: '{{ ceph_mon }}'
+  register: ceph_key
+
+- name: 'Set the /etc/ceph/{{ ceph_cluster_name }}.client.{{ lab_name }}.secret'
+  ansible.builtin.copy:
+    content: '{{ ceph_key.stdout }}'
+    dest: '/etc/ceph/{{ ceph_cluster_name }}.client.{{ lab_name }}.secret'
+    owner: root
+    group: root
+    mode: '0644'
+
+- name: 'Get the ceph fsid'
+  ansible.builtin.command:
+    cmd: 'ceph --cluster {{ ceph_cluster_name }} fsid'
+  changed_when: false
+  delegate_to: '{{ ceph_mon }}'
+  register: ceph_fsid
+
+- debug: msg="{{ lab_name }}@{{ ceph_fsid.stdout }}.cephfs=/{{ lab_name }}-scratch"
+
+- name: 'Make sure that the mount path exists'
+  ansible.builtin.file:
+    path: '/mnt/{{ lab_name }}-scratch'
+    state: 'directory'
+
+- name: 'Mount the ceph fs volume'
+  ansible.builtin.mount:
+    path: '/mnt/{{ lab_name }}-scratch'
+    src: '{{ lab_name }}@{{ ceph_fsid.stdout }}.cephfs=/{{ lab_name }}-scratch'
+    fstype: 'ceph'
+    opts: 'mon_addr=10.90.36.16/10.90.36.17/10.90.36.18,noauto,rw,relatime,name={{ lab_name }},secretfile=/etc/ceph/{{ ceph_cluster_name }}.client.{{ lab_name }}.secret,acl'
+    state: 'mounted'
+    dump: '0'
+    passno: '0'
+  when: ansible_distribution == 'Ubuntu' and ansible_distribution_major_version == '22'
+
+- name: 'Mount the ceph fs volume'
+  ansible.builtin.mount:
+    path: '/mnt/{{ lab_name }}-scratch'
+    src: '10.90.36.16,10.90.36.17,10.90.36.18:/{{ lab_name }}-scratch'
+    fstype: 'ceph'
+    opts: 'noauto,rw,relatime,name={{ lab_name }},secretfile=/etc/ceph/{{ ceph_cluster_name }}.client.{{ lab_name }}.secret,acl'
+    state: 'mounted'
+    dump: '0'
+    passno: '0'
+  when: ansible_distribution == 'Ubuntu' and ansible_distribution_major_version == '20'
